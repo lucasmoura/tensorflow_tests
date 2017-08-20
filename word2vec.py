@@ -14,6 +14,7 @@ COUNT_PATH = 'count.pkl'
 DICTIONARY_PATH = 'dictionary.pkl'
 REVERSED_DICTIONARY_PATH = 'reversed_dictionary.pkl'
 DATA_PATH = 'data.pkl'
+FINAL_EMBEDDING_PATH = 'final_embeddings.pkl'
 
 data_index = 0
 
@@ -178,7 +179,13 @@ def main():
     embedding_size = 128
     num_sampled = 64
     learning_rate = 1.0
+    top_k = 8
     num_steps = 100001
+
+    # Validation set
+    valid_size = 16
+    valid_window = 100
+    valid_examples = np.random.choice(valid_window, valid_size, replace=False)
 
     vocabulary = prepare_data('text8', verbose=True)
     data, count, dictionary, reversed_dictionary = prepate_dataset(
@@ -201,6 +208,7 @@ def main():
     with graph.as_default():
         train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
         train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
+        valid_dataset = tf.constant(valid_examples, dtype=tf.int32)
 
         with tf.device('/cpu:0'):
             input_weights = tf.Variable(
@@ -223,6 +231,14 @@ def main():
 
         optimizer = tf.train.GradientDescentOptimizer(
             learning_rate).minimize(loss)
+
+        norm = tf.sqrt(tf.reduce_sum(
+            tf.square(input_weights), 1, keep_dims=True))
+        normalized_embeddings = input_weights / norm
+        valid_embeddings = tf.nn.embedding_lookup(
+            normalized_embeddings, valid_dataset)
+        similarity = tf.matmul(
+            valid_embeddings, normalized_embeddings, transpose_b=True)
 
         init = tf.global_variables_initializer()
 
@@ -247,6 +263,26 @@ def main():
 
                 print('Average loss at step ', step, ': ', average_loss)
                 average_loss = 0
+
+            if step % 10000 == 0:
+                print()
+                sim = similarity.eval()
+
+                for i in range(valid_size):
+                    valid_word = reversed_dictionary[valid_examples[i]]
+                    nearest = (-sim[i, :]).argsort()[1:top_k + 1]
+                    log_str = 'Nearest to {}:'.format(valid_word)
+
+                    for k in range(top_k):
+                        close_word = reversed_dictionary[nearest[k]]
+                        log_str = '{} {},'.format(log_str, close_word)
+
+                    print(log_str)
+
+                print()
+
+        final_embeddings = normalized_embeddings.eval()
+        pickle_dump(FINAL_EMBEDDING_PATH, final_embeddings)
 
 
 if __name__ == '__main__':
