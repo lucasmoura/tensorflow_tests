@@ -4,9 +4,10 @@ import tensorflow as tf
 import numpy as np
 
 import collections
+import math
+import os
 import pickle
 import random
-import os
 
 VOCABULARY_PATH = 'vocabulary.pkl'
 COUNT_PATH = 'count.pkl'
@@ -173,7 +174,11 @@ def main():
     vocabulary_size = 50000
     window_size = 1
     num_skips = window_size * 2
-    batch_size = 64
+    batch_size = 128
+    embedding_size = 128
+    num_sampled = 64
+    learning_rate = 1.0
+    num_steps = 100001
 
     vocabulary = prepare_data('text8', verbose=True)
     data, count, dictionary, reversed_dictionary = prepate_dataset(
@@ -185,6 +190,63 @@ def main():
           [reversed_dictionary[i] for i in data[:10]])
 
     batch, labels = generate_batch(data, batch_size, num_skips, window_size)
+
+    print('\nBatch example:\n')
+    for i in range(8):
+        print(batch[i], reversed_dictionary[batch[i]], '->',
+              labels[i, 0], reversed_dictionary[labels[i, 0]])
+    print()
+
+    graph = tf.Graph()
+    with graph.as_default():
+        train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
+        train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
+
+        with tf.device('/cpu:0'):
+            input_weights = tf.Variable(
+                tf.random_uniform([vocabulary_size, embedding_size],
+                                  -1.0, 1.0))
+            center_words = tf.nn.embedding_lookup(input_weights, train_inputs)
+
+            output_weights = tf.Variable(
+                tf.truncated_normal([vocabulary_size, embedding_size],
+                                    stddev=1.0 / math.sqrt(embedding_size)))
+            output_biases = tf.Variable(tf.zeros([vocabulary_size]))
+
+        loss = tf.reduce_mean(
+            tf.nn.nce_loss(weights=output_weights,
+                           biases=output_biases,
+                           labels=train_labels,
+                           inputs=center_words,
+                           num_sampled=num_sampled,
+                           num_classes=vocabulary_size))
+
+        optimizer = tf.train.GradientDescentOptimizer(
+            learning_rate).minimize(loss)
+
+        init = tf.global_variables_initializer()
+
+    with tf.Session(graph=graph) as session:
+        init.run()
+        print('Initialized')
+
+        average_loss = 0
+        for step in range(num_steps):
+            batch_inputs, batch_labels = generate_batch(
+                data, batch_size, num_skips, window_size)
+
+            feed_dict = {train_inputs: batch_inputs,
+                         train_labels: batch_labels}
+
+            _, loss_value = session.run([optimizer, loss], feed_dict=feed_dict)
+            average_loss += loss_value
+
+            if step % 2000 == 0:
+                if step > 0:
+                    average_loss /= 2000
+
+                print('Average loss at step ', step, ': ', average_loss)
+                average_loss = 0
 
 
 if __name__ == '__main__':
